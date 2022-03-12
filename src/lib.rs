@@ -14,7 +14,7 @@
 extern crate embedded_hal as hal;
 
 use hal::blocking::delay::DelayMs;
-use hal::blocking::i2c::{Write, WriteRead};
+use hal::blocking::i2c::{Read, Write, WriteRead};
 
 const I2C_ADDRESS: u8 = 0x38;
 
@@ -97,24 +97,47 @@ impl Temperature {
 
 impl<I2C, D, E> AHT10<I2C, D>
 where
-    I2C: WriteRead<Error = E> + Write<Error = E>,
+    I2C: WriteRead<Error = E> + Write<Error = E> + Read<Error = E>,
     D: DelayMs<u16>,
 {
     /// Creates a new AHT10 device from an I2C peripheral.
-    pub fn new(i2c: I2C, delay: D) -> Result<Self, E> {
+    pub fn new(i2c: I2C, delay: D) -> Result<Self, Error<E>> {
         let mut dev = AHT10 {
             i2c: i2c,
             delay: delay,
         };
-        dev.write_cmd(Command::GetRaw, 0)?;
-        dev.delay.delay_ms(300);
+
+        dev.write_cmd(Command::Reset, 0x0800)?;
+        dev.delay.delay_ms(20);
+
         // MSB notes:
         // Bit 2 set => temperature is roughly doubled(?)
         // Bit 3 set => calibrated flag
         // Bit 4 => temperature is negative? (cyc mode?)
         dev.write_cmd(Command::Calibrate, 0x0800)?;
-        dev.delay.delay_ms(300);
+
+        loop {
+            let status = dev.read_status()?;
+            if status.contains(StatusFlags::BUSY) {
+                dev.delay.delay_ms(10);
+                continue;
+            }
+
+            if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
+                return Err(Error::Uncalibrated());
+            }
+            break;
+        }
+
         Ok(dev)
+    }
+
+    // Read a value from the sensor as the 'current status'.
+    fn read_status(&mut self) -> Result<StatusFlags, E> {
+        let buf: &mut [u8; 7] = &mut [0; 7];
+        self.i2c.read(I2C_ADDRESS, buf)?;
+        let status = StatusFlags { bits: buf[0] };
+        Ok(status)
     }
 
     /// Soft reset the sensor.
@@ -126,18 +149,27 @@ where
 
     /// Read humidity and temperature.
     pub fn read(&mut self) -> Result<(Humidity, Temperature), Error<E>> {
-        let buf: &mut [u8; 7] = &mut [0; 7];
-        // Sort of reverse engineered the cmd data:
-        // Bit 0 -> temperature calibration (0 => +0.5C)
-        // Bit {1,2,3} -> refresh rate? (0 => slow refresh)
         self.i2c
-            .write_read(I2C_ADDRESS, &[Command::GetCT as u8, 0b11111111, 0], buf)?;
-        let status = StatusFlags { bits: buf[0] };
-        if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
-            return Err(Error::Uncalibrated());
+            .write(I2C_ADDRESS, &[Command::GetCT as u8, 0x33, 0])?;
+
+        loop {
+            let status = self.read_status()?;
+            if status.contains(StatusFlags::BUSY) {
+                self.delay.delay_ms(10);
+                continue;
+            }
+
+            if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
+                return Err(Error::Uncalibrated());
+            }
+            break;
         }
-        let hum = ((buf[1] as u32) << 12) | ((buf[2] as u32) << 4) | ((buf[3] as u32) >> 4);
-        let temp = (((buf[3] as u32) & 0x0f) << 16) | ((buf[4] as u32) << 8) | (buf[5] as u32);
+
+        let buf: &mut [u8; 6] = &mut [0; 6];
+        self.i2c.read(I2C_ADDRESS, buf)?;
+
+        let hum = ((buf[0] as u32) << 12) | ((buf[1] as u32) << 4) | ((buf[2] as u32) >> 4);
+        let temp = (((buf[2] as u32) & 0x0f) << 16) | ((buf[3] as u32) << 8) | (buf[4] as u32);
         Ok((Humidity { h: hum }, Temperature { t: temp }))
     }
 
