@@ -102,12 +102,9 @@ where
 {
     /// Creates a new AHT10 device from an I2C peripheral.
     pub fn new(i2c: I2C, delay: D) -> Result<Self, Error<E>> {
-        let mut dev = AHT10 {
-            i2c: i2c,
-            delay: delay,
-        };
+        let mut dev = AHT10 { i2c, delay };
 
-        dev.write_cmd(Command::Reset, 0x0800)?;
+        dev.i2c.write(I2C_ADDRESS, &[Command::Reset as u8])?;
         dev.delay.delay_ms(20);
 
         // MSB notes:
@@ -115,19 +112,7 @@ where
         // Bit 3 set => calibrated flag
         // Bit 4 => temperature is negative? (cyc mode?)
         dev.write_cmd(Command::Calibrate, 0x0800)?;
-
-        loop {
-            let status = dev.read_status()?;
-            if status.contains(StatusFlags::BUSY) {
-                dev.delay.delay_ms(10);
-                continue;
-            }
-
-            if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
-                return Err(Error::Uncalibrated());
-            }
-            break;
-        }
+        dev.wait_to_be_ready()?;
 
         Ok(dev)
     }
@@ -138,6 +123,22 @@ where
         self.i2c.read(I2C_ADDRESS, buf)?;
         let status = StatusFlags { bits: buf[0] };
         Ok(status)
+    }
+
+    fn wait_to_be_ready(&mut self) -> Result<(), Error<E>> {
+        loop {
+            let status = self.read_status()?;
+            if status.contains(StatusFlags::BUSY) {
+                self.delay.delay_ms(10);
+                continue;
+            }
+
+            if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
+                return Err(Error::Uncalibrated());
+            }
+            break;
+        }
+        Ok(())
     }
 
     /// Soft reset the sensor.
@@ -152,18 +153,7 @@ where
         self.i2c
             .write(I2C_ADDRESS, &[Command::GetCT as u8, 0x33, 0])?;
 
-        loop {
-            let status = self.read_status()?;
-            if status.contains(StatusFlags::BUSY) {
-                self.delay.delay_ms(10);
-                continue;
-            }
-
-            if !status.contains(StatusFlags::CALIBRATION_ENABLE) {
-                return Err(Error::Uncalibrated());
-            }
-            break;
-        }
+        self.wait_to_be_ready()?;
 
         let buf: &mut [u8; 6] = &mut [0; 6];
         self.i2c.read(I2C_ADDRESS, buf)?;
