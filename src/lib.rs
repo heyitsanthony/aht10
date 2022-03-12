@@ -168,8 +168,8 @@ where
         let buf: &mut [u8; 6] = &mut [0; 6];
         self.i2c.read(I2C_ADDRESS, buf)?;
 
-        let hum = ((buf[0] as u32) << 12) | ((buf[1] as u32) << 4) | ((buf[2] as u32) >> 4);
-        let temp = (((buf[2] as u32) & 0x0f) << 16) | ((buf[3] as u32) << 8) | (buf[4] as u32);
+        let hum = ((buf[1] as u32) << 12) | ((buf[2] as u32) << 4) | ((buf[3] as u32) >> 4);
+        let temp = (((buf[3] as u32) & 0x0f) << 16) | ((buf[4] as u32) << 8) | (buf[5] as u32);
         Ok((Humidity { h: hum }, Temperature { t: temp }))
     }
 
