@@ -134,7 +134,7 @@ where
 
     // Read a value from the sensor as the 'current status'.
     fn read_status(&mut self) -> Result<StatusFlags, E> {
-        let buf: &mut [u8; 7] = &mut [0; 7];
+        let buf: &mut [u8; 1] = &mut [0; 1];
         self.i2c.read(I2C_ADDRESS, buf)?;
         let status = StatusFlags { bits: buf[0] };
         Ok(status)
